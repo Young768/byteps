@@ -151,8 +151,10 @@ class DenseReduceComm : public SparseComm {
     }
 
     // post a barrier to broadcast dense buffer
+    if(local_rank_ == 0){
     ps::Postoffice::Get()->Barrier(
       0, ps::kWorkerGroup + ps::kServerGroup + ps::kScheduler);
+    }
     
     std::vector<int> timestamps;
     for (int wid = 0; wid < num_worker_; ++wid) {
