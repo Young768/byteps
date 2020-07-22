@@ -331,6 +331,10 @@ void bytepsDenseReduceExecAsync(int local_rank, cudaStream_t stream) {
   _dense_reduce_comms[local_rank]->ExecAsync();
 }
 
+void bytepsDenseBCastExec(int local_rank, cudaStream_t stream) {
+  _dense_reduce_comms[local_rank]->ExecBCast();
+}
+
 void bytepsSynchronize(int local_rank, cudaStream_t stream, OP op) { 
   switch (op) {
     case GATHER: {

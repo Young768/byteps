@@ -106,9 +106,59 @@ class DenseReduceComm : public SparseComm {
       auto& lens = pslens_[wid]; 
       
       // use the pslite cmd field to store my global gpu id 
-      int my_global_id = worker_id_ * local_size_ + local_rank_; 
+      int my_global_id = worker_id_ * local_size_ + local_rank_;
 
       ps_->ZPush(keys, vals, lens, my_global_id); 
+      auto ts = 
+          ps_->ZPull(keys, &vals, &lens, my_global_id); 
+
+      timestamps.push_back(ts);
+    }
+
+    for (auto ts : timestamps) {
+      ps_->Wait(ts);
+    }
+
+    CUDA_CALL(cudaMemcpyAsync(
+      (void*) dst_, 
+      (const void *) cpubuff_, 
+      (size_t) buflen_, 
+      (cudaMemcpyKind) cudaMemcpyHostToDevice, 
+      (cudaStream_t) *copy_h2d_stream_));
+  }
+
+    void ExecBCast() {
+    CUDA_CALL(cudaMemcpyAsync(
+      (void*) cpubuff_, 
+      (const void *) src_, 
+      (size_t) buflen_, 
+      (cudaMemcpyKind) cudaMemcpyDeviceToHost, 
+      (cudaStream_t) *copy_d2h_stream_));
+    CUDA_CALL(cudaStreamSynchronize(*copy_d2h_stream_));
+
+    int my_global_id = worker_id_ * local_size_ + local_rank_;
+    
+    if (my_global_id !=0){
+      memset(cpubuff_, 0, buflen_);
+    }
+
+    for (int wid = 0; wid < num_worker_; ++wid) {
+      auto& keys = pskeys_[wid];
+      auto& vals = psvals_[wid]; 
+      auto& lens = pslens_[wid]; 
+
+      ps_->ZPush(keys, vals, lens, my_global_id); 
+    }
+
+    // post a barrier to broadcast dense buffer
+    ps::Postoffice::Get()->Barrier(
+      0, ps::kWorkerGroup + ps::kServerGroup + ps::kScheduler);
+    
+    std::vector<int> timestamps;
+    for (int wid = 0; wid < num_worker_; ++wid) {
+      auto& keys = pskeys_[wid];
+      auto& vals = psvals_[wid]; 
+      auto& lens = pslens_[wid]; 
       auto ts = 
           ps_->ZPull(keys, &vals, &lens, my_global_id); 
 

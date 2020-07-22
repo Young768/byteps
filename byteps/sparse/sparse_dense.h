@@ -38,6 +38,7 @@ extern "C" void bytepsSparseInitDensePerGPU(int device_id /* starts with 0 */,
 //                                       std::vector<void*>& denseDeltaAfterReduceBuffers,
 //                                       int sizeDenseDelta);
 extern "C" void bytepsDenseReduceExecAsync(int local_rank, cudaStream_t stream);
+extern "C" void bytepsDenseBCastExec(int local_rank, cudaStream_t stream);
 extern "C"  void bytepsDenseSynchronize(int local_rank, cudaStream_t stream);
 
 } // namespace sparse
