@@ -38,17 +38,12 @@
 
 namespace byteps {
 namespace common {
-enum BytePSRole { LOCAL_ROOT, LOCAL_WORKER };
+//enum BytePSRole { LOCAL_ROOT, LOCAL_WORKER };
 
 enum BytePSCommSignal {
-  REDUCE_READY,
-  PCIE_REDUCE_READY,
-  BCAST_READY,
-  PUSH_READY,
-  DO_REDUCE,
-  DO_BROADCAST,
-  DO_GROUP,
-  DO_COPYH2D
+  GATHER_PRE,
+  SCATTER_FOLLOWUP,
+  GATHER_PRE_READY
 };
 
 struct BytePSCommMsg {
@@ -64,29 +59,20 @@ class BytePSComm {
   virtual void init(int* rank, int* size, int* local_rank, int* local_size,
                     int* worker_id, BytePSRole* my_role) = 0;
   virtual int sendSignal(int destination, void* data, int len) = 0;
-  virtual int sendSignalToRoot(void* data, int len) = 0;
   virtual int recvSignal(int* source, void* data, int max_len) = 0;
-  virtual int recvSignalFromRoot(void* data, int max_len) = 0;
-  virtual int broadcastSignal(void* data, int len) = 0;
 
-  virtual int getRank() { return _rank; }
   virtual int getSize() { return _size; }
-  virtual int getLocalRank() { return _local_rank; }
   virtual int getLocalSize() { return _local_size; }
   virtual int getWorkerID() { return _worker_id; }
 
   virtual std::vector<int> getMembers() { return _members; }
-  virtual int getRoot() { return _root; }
 
  protected:
-  int _rank;
   int _size;
-  int _local_rank;
   int _local_size;
   int _worker_id;
 
   std::vector<int> _members;
-  int _root;
 
   void* _comm;
 };
@@ -99,7 +85,7 @@ class BytePSCommSocket : public BytePSComm {
                    const std::vector<int>& members);
 
   ~BytePSCommSocket() {
-    if ((_root == _local_rank) && _listen_thread) {
+    if (_listen_thread) {
       _listen_thread->join();
     }
     close(_send_fd);
@@ -121,10 +107,7 @@ class BytePSCommSocket : public BytePSComm {
   void init(int* rank, int* size, int* local_rank, int* local_size,
             int* worker_id, BytePSRole* my_role);
   int sendSignal(int destination, void* data, int len);
-  int sendSignalToRoot(void* data, int len);
   int recvSignal(int* source, void* data, int max_len);
-  int recvSignalFromRoot(void* data, int max_len);
-  int broadcastSignal(void* data, int len);
 
   int getSendFd() { return _send_fd; }
   int getRecvFd() { return _recv_fd; }
@@ -140,8 +123,8 @@ class BytePSCommSocket : public BytePSComm {
 
   std::string _send_path;
   std::string _recv_path;
-  int _recv_fd;
-  int _send_fd;
+  std::vector<int> _recv_fd;
+  std::vector<int> _send_fd;
 
   std::mutex _socket_mu;
 };

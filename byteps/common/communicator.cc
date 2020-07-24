@@ -31,9 +31,7 @@ BytePSCommSocket::BytePSCommSocket(std::shared_ptr<BytePSComm> comm,
   std::shared_ptr<BytePSCommSocket> sock_comm =
       std::static_pointer_cast<BytePSCommSocket>(comm);
   // TODO: use private members directly
-  _rank = sock_comm->getRank();
   _size = sock_comm->getSize();
-  _local_rank = sock_comm->getLocalRank();
   _local_size = sock_comm->getLocalSize();
   _worker_id = sock_comm->getWorkerID();
   _send_path = sock_comm->getSendPath() + path_suffix;
@@ -42,59 +40,39 @@ BytePSCommSocket::BytePSCommSocket(std::shared_ptr<BytePSComm> comm,
   _recv_fd = initSocket(_local_rank, _recv_path);
 
   _members = (members.size() > 0) ? members : sock_comm->getMembers();
-  _root = _members.back();
 
-  auto my_role = (_local_rank == _root) ? LOCAL_ROOT : LOCAL_WORKER;
-  bool is_root = (my_role == LOCAL_ROOT) ? true : false;
-  // init socket comm
-  if (is_root) {  // root
-    _listen_thread =
+  _listen_thread =
         new std::thread(&BytePSCommSocket::startListenThread, this);
-  }
 
-  BPS_LOG(DEBUG) << "This is " << path_suffix << (is_root ? " ROOT" : " WORKER")
-                 << " device, rank=" << _local_rank
-                 << ", all sockets create successfully";
+  BPS_LOG(DEBUG) << "all sockets create successfully";
 }
 
-void BytePSCommSocket::init(int* rank, int* size, int* local_rank,
-                            int* local_size, int* worker_id,
-                            BytePSRole* my_role) {
+void BytePSCommSocket::init(int* size, int* local_size, int* worker_id) {
   BPS_LOG(DEBUG) << "Using Communicator=Socket";
 
-  // We should init rank, size, etc. using getenv
+  // We should init size, etc. using getenv
   // do env check
-  BPS_CHECK(getenv("BYTEPS_LOCAL_RANK"))
-      << "error: env BYTEPS_LOCAL_RANK not set";
   BPS_CHECK(getenv("BYTEPS_LOCAL_SIZE"))
       << "error: env BYTEPS_LOCAL_SIZE not set";
   BPS_CHECK(getenv("DMLC_WORKER_ID")) << "error: env DMLC_WORKER_ID not set";
   BPS_CHECK(getenv("DMLC_NUM_WORKER")) << "error: env DMLC_NUM_WORKER not set";
 
-  *local_rank = atoi(getenv("BYTEPS_LOCAL_RANK"));
   *local_size = atoi(getenv("BYTEPS_LOCAL_SIZE"));
   *worker_id = atoi(getenv("DMLC_WORKER_ID"));
   auto num_worker = atoi(getenv("DMLC_NUM_WORKER"));
 
   // we assume _local_size (i.e., # GPU) is consistent on all workers
-  *rank = (*local_rank) + (*worker_id) * (*local_size);
-  // force setting global rank
-  *rank = getenv("BYTEPS_GLOBAL_RANK") ? atoi(getenv("BYTEPS_GLOBAL_RANK")) : *rank;
   *size = num_worker * (*local_size);
 
-  _rank = *rank;
   _size = *size;
-  _local_rank = *local_rank;
   _local_size = *local_size;
   _worker_id = *worker_id;
 
   for (int i = 0; i < _local_size; i++) {
     _members.push_back(i);
   }
-  _root = _members.back();
-
-  *my_role = (_local_rank == _root) ? LOCAL_ROOT : LOCAL_WORKER;
-  bool is_root = (*my_role == LOCAL_ROOT) ? true : false;
+  _recv_fd.resize(_local_size);
+  _send_fd.resize(_local_size);
 
   if (getenv("BYTEPS_SOCKET_PATH")) {
     _send_path = std::string(getenv("BYTEPS_SOCKET_PATH")) +
@@ -106,23 +84,17 @@ void BytePSCommSocket::init(int* rank, int* size, int* local_rank,
     _recv_path = std::string(DEFAULT_BASE_SOCKET_PATH_RECV);
   }
 
-  _send_fd = initSocket(_local_rank, _send_path);
-  _recv_fd = initSocket(_local_rank, _recv_path);
-
-  // init socket comm
-  if (is_root) {  // root
-    _listen_thread =
-        new std::thread(&BytePSCommSocket::startListenThread, this);
-
-    // Just in case launching root earlier than non-root
-    // TODO: use retry instead of sleep
-    // if (_local_size > 1)
-    // std::this_thread::sleep_for(std::chrono::microseconds(1000000));
+  for (int i = 0; i < _local_size; i++) {
+    _send_fd[i] = initSocket(i, _send_path);
+    _recv_fd[i] = initSocket(i, _recv_path);
   }
 
-  BPS_LOG(DEBUG) << "This is " << (is_root ? "ROOT" : "WORKER")
-                 << " device, rank=" << _local_rank
-                 << ", all sockets create successfully";
+
+  _listen_thread =
+        new std::thread(&BytePSCommSocket::startListenThread, this);
+
+
+  BPS_LOG(DEBUG) << "all sockets create successfully";
 }
 
 int BytePSCommSocket::initSocket(int rank, const std::string& path) {
@@ -230,9 +202,6 @@ int BytePSCommSocket::sendSignal(int destination, void* data, int len) {
   return ret;
 }
 
-int BytePSCommSocket::sendSignalToRoot(void* data, int len) {
-  return sendSignal(_root, data, len);
-}
 
 int BytePSCommSocket::recvSignal(int* source, void* data, int max_len) {
   int rc;
@@ -257,22 +226,6 @@ int BytePSCommSocket::recvSignal(int* source, void* data, int max_len) {
                  << ", myrank=" << _local_rank;
 
   return rc;
-}
-
-int BytePSCommSocket::recvSignalFromRoot(void* data, int max_len) {
-  int src;
-  int rc = recvSignal(&src, data, max_len);
-  if (BytePSGlobal::ShouldShutdown()) return rc;
-  BPS_CHECK_EQ(src, _root) << "Non-root received signal from another non-root";
-  return rc;
-}
-
-int BytePSCommSocket::broadcastSignal(void* data, int len) {
-  for (int i : _members) {
-    if (i == _local_rank) continue;
-    sendSignal(i, (void*)data, len);
-  }
-  return 0;
 }
 
 }  // namespace common
