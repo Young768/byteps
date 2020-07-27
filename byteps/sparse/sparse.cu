@@ -48,11 +48,20 @@ void bytepsSparseInit(std::vector<void*>& embedBuffers,
   auto workerNum = BytePSSparseCommon::GetNumWorker();
   auto workerID = BytePSSparseCommon::GetWorkerID();
   auto globalSize = localSize * workerNum;
+  
+  //test IPC socket.
+  int req_id = 1;
+  int storage = 2;
+  int req_len =1;
+  LOG(INFO) << "donglin: workerID is: " << workerID;
+  _test_comm = std::make_shared<BytePSCommSocket>();
+  _test_comm->init(&localSize, &workerID);
+  _test_comm->gather_ready(req_id, storage, req_len);
 
   for (int i = 0; i < localSize; i++) {
     cudaDeviceProp prop;
     CUDA_CALL(cudaGetDeviceProperties(&prop, i));
-
+          
     // CUDA IPC is only supported on devices with unified addressing
     CHECK(prop.unifiedAddressing)
         << "Device " << i << " does not support unified addressing.";
@@ -329,10 +338,6 @@ void bytepsScatterExecAsync(int local_rank, cudaStream_t stream) {
 // TODO (chengyu.dai): Add Broadcast for initializing the latestBuffer.
 void bytepsDenseReduceExecAsync(int local_rank, cudaStream_t stream) {
   _dense_reduce_comms[local_rank]->ExecAsync();
-}
-
-void bytepsDenseBCastExec(int local_rank, cudaStream_t stream) {
-  _dense_reduce_comms[local_rank]->ExecBCast();
 }
 
 void bytepsSynchronize(int local_rank, cudaStream_t stream, OP op) { 

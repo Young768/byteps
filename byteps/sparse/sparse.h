@@ -22,6 +22,7 @@
 #include "local_comm.h"
 #include "dist_comm.h"
 #include "dense_comm.h"
+#include "socketcomm.h"
 
 namespace byteps {
 namespace sparse {
@@ -50,6 +51,9 @@ static std::vector<std::unique_ptr<LocalScatterComm>> _local_scatter_comms;
 // distributed communication handler
 static std::vector<std::unique_ptr<DistGatherComm>> _dist_gather_comms;
 static std::vector<std::unique_ptr<DistScatterComm>> _dist_scatter_comms;
+
+//socketcomm for IPC
+static std::shared_ptr<BytePSCommSocket> _test_comm;
 
 // the communication handler for dense layers 
 static std::vector<std::unique_ptr<DenseReduceComm>> _dense_reduce_comms;

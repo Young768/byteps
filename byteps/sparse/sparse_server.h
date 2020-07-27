@@ -23,6 +23,7 @@
 #include "ps/internal/threadsafe_queue.h"
 #include "util.h"
 #include "cpu_reducer.h"
+#include "socketcomm.h"
 
 namespace byteps {
 namespace sparse {
@@ -61,6 +62,9 @@ static size_t dense_buflen_ = 0;
 static std::vector<void*> local_dense_bufs_;
 static void* lastest_params_buf_;
 static ::byteps::sparse::CpuReducer* bps_reducer_;
+
+//socketcomm for server IPC
+static std::shared_ptr<BytePSCommSocket> _test_server_comm;
 
 using TsQueue = ps::ThreadsafeQueue<BytePSSparseEngineMessage>;
 static size_t engine_nthreads_;

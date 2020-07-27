@@ -377,10 +377,6 @@ extern "C" void bytepsSparseServer() {
   // post a barrier to sync the global buffer length
   ps::Postoffice::Get()->Barrier(
       0, ps::kWorkerGroup + ps::kServerGroup + ps::kScheduler);
-  
-  // post a barrier to broadcast dense buffer
-  ps::Postoffice::Get()->Barrier(
-      0, ps::kWorkerGroup + ps::kServerGroup + ps::kScheduler);
 
   // this Finalize will also post a barrier
   ps::Finalize(0, true); 

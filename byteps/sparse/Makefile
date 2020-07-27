@@ -32,9 +32,10 @@ ALL_DEPEND_OBJECTS = $(BUILD_DIR)/plan_parser.o \
 					 $(BUILD_DIR)/common.o \
 					 $(BUILD_DIR)/cpu_reducer.o \
 					 $(BUILD_DIR)/queue_exec.o \
+					 $(BUILD_DIR)/socketcomm.o \
 					 $(BUILD_DIR)/loop.o 
 
-DEPEND_HEADERS = sparse.h sparse_dense.h communicator.h common.h util.h cpu_reducer.h local_comm.h dist_comm.h dense_comm.h loop.h queue_exec.h
+DEPEND_HEADERS = socketcomm.h sparse.h sparse_dense.h communicator.h common.h util.h cpu_reducer.h local_comm.h dist_comm.h dense_comm.h loop.h queue_exec.h
 
 .PHONY: all clean
 
@@ -57,6 +58,9 @@ $(BUILD_DIR)/queue_exec.o: queue_exec.h queue_exec.cu
 
 $(BUILD_DIR)/util.o: util.h util.cc
 	$(NVCC) $(NVCCFLAGS) -c util.cc -o $(BUILD_DIR)/util.o 
+
+$(BUILD_DIR)/socketcomm.o: socketcomm.h socketcomm.cc
+	$(NVCC) $(NVCCFLAGS) -c socketcomm.cc -o $(BUILD_DIR)/socketcomm.o 
 
 $(BUILD_DIR)/common.o: common.h common.cc
 	$(NVCC) $(NVCCFLAGS) -c common.cc -o $(BUILD_DIR)/common.o 
