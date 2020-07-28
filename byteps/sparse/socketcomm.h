@@ -100,8 +100,8 @@ class BytePSCommSocket : public BytePSSparseComm {
   void init(int* local_size, int* worker_id);
   int sendSignal(int destination, void* data, int len);
   int recvSignal(int* source, void* data, int max_len);
-  int gather_ready(int req_session_id, int storage_id, int max_len);
-  int gather_pre(int req_session_id, int storage_id, int max_len, int op);
+  int gather_ready(int req_session_id, int storage_id);
+  int gather_pre(int req_session_id, int storage_id, int op);
 
   int getSendFd() { return _send_fd; }
   int getRecvFd() { return _recv_fd; }
