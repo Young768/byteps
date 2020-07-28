@@ -136,7 +136,6 @@ void BytePSCommSocket::startListenThread() {  // each worker starts this in
     //if (BytePSGlobal::ShouldShutdown()) break;
 
     auto message = *(BytePSCommMsg*)buffer;
-    LOG(INFO) << "what info we have:"<<message.signal;
     switch (message.signal) {
       case GATHER_PRE:
         LOG(INFO) << "receive info 1 from server";
@@ -216,16 +215,24 @@ int BytePSCommSocket::recvSignal(int* source, void* data, int max_len) {
 
 int BytePSCommSocket::gather_ready(int req_session_id, int storage_id) {
   int dst = _worker_id+1;
-  int op = 0;
+  int op;
   BytePSCommSignal sig = GATHER_PRE_READY;
   struct BytePSCommMsg data = {_worker_id, sig, req_session_id, storage_id, op};
   return sendSignal(dst, &data, sizeof(data));
 }
 
-int BytePSCommSocket::gather_pre(int req_session_id, int storage_id, int op) {
+int BytePSCommSocket::scatter_followup(int req_session_id, int storage_id, int op) {
   int dst = _worker_id-1;
   BytePSCommSignal sig = GATHER_PRE;
-  struct BytePSCommMsg data = {_worker_id, GATHER_PRE, req_session_id, storage_id, op};
+  struct BytePSCommMsg data = {_worker_id, sig, req_session_id, storage_id, op};
+  return sendSignal(dst, &data, sizeof(data));
+}
+
+int BytePSCommSocket::gather_pre(int req_session_id, int storage_id) {
+  int dst = _worker_id-1;
+  BytePSCommSignal sig = SCATTER_FOLLOWUP;
+  int op;
+  struct BytePSCommMsg data = {_worker_id, sig, req_session_id, storage_id, op};
   return sendSignal(dst, &data, sizeof(data));
 }
 

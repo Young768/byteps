@@ -54,6 +54,8 @@ static std::vector<std::unique_ptr<DistScatterComm>> _dist_scatter_comms;
 
 //socketcomm for IPC
 static std::shared_ptr<BytePSCommSocket> _test_comm;
+//socketcomm for IPC
+static std::shared_ptr<BytePSCommSocket> _test_comm1;
 
 // the communication handler for dense layers 
 static std::vector<std::unique_ptr<DenseReduceComm>> _dense_reduce_comms;

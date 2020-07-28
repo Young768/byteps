@@ -50,13 +50,17 @@ void bytepsSparseInit(std::vector<void*>& embedBuffers,
   auto globalSize = localSize * workerNum;
   
   //test IPC socket.
+  int serverID =1;
   int req_id = 1;
   int storage = 2;
-  int req_len =1;
   LOG(INFO) << "donglin: workerID is: " << workerID;
   _test_comm = std::make_shared<BytePSCommSocket>();
+  _test_comm1 = std::make_shared<BytePSCommSocket>();
   _test_comm->init(&localSize, &workerID);
-  _test_comm->gather_ready(req_id, storage, req_len);
+  _test_comm1->init(&localSize, &serverID);
+  _test_comm->gather_ready(req_id, storage);
+
+
 
   for (int i = 0; i < localSize; i++) {
     cudaDeviceProp prop;
