@@ -26,9 +26,8 @@ class QueueExecLoop {
   // This should be only called at destructor or during test.
   void stop_executors();
 
-//  protected:
-  QueueExecLoop() : running_(true) {}
-  
+  QueueExecLoop(int num_worker = 1) : num_worker_(num_worker), running_(true) {}
+
   ~QueueExecLoop() {
     stop_executors();
   }
@@ -36,6 +35,7 @@ class QueueExecLoop {
   void start_executors();
 
  private:
+  int num_worker_;
 
   // This is to enqueue and dequeue the forward jobs accordingly.
   std::mutex job_queue_mtx_;
@@ -65,42 +65,53 @@ struct DenseTask{
 };
 
 
-class PredefinedQueueExecLoop : public QueueExecLoop{
+class PredefinedDenseQueueExecLoop : public QueueExecLoop{
  public:
   void add_predefined_worker(DenseTask task);
 
-  void set_downstream(PredefinedQueueExecLoop * downstream);
+  void set_downstream(PredefinedDenseQueueExecLoop * downstream);
 
 //  protected:
-  PredefinedQueueExecLoop() : QueueExecLoop() {}
+  PredefinedDenseQueueExecLoop() : QueueExecLoop() {}
+  virtual ~PredefinedDenseQueueExecLoop() {};
 
  private:
   virtual void predefined_work(DenseTask task) = 0;
-  PredefinedQueueExecLoop * downstream_;
+  
+  PredefinedDenseQueueExecLoop * downstream_;
 };
 
 
-class MemcpyH2DQueueExecLoop : public PredefinedQueueExecLoop{
+class MemcpyH2DQueueExecLoop : public PredefinedDenseQueueExecLoop{
  public:
   static MemcpyH2DQueueExecLoop* init_loop(std::mutex * mtx_DenseLatestBuffers);
+  ~MemcpyH2DQueueExecLoop() override {
+    stop_executors();
+    delete mtx_DenseLatestBuffers_;
+  }
 
  private:
   MemcpyH2DQueueExecLoop(std::mutex * mtx_DenseLatestBuffers) 
-    : PredefinedQueueExecLoop(), mtx_DenseLatestBuffers_(mtx_DenseLatestBuffers) {}
+    : PredefinedDenseQueueExecLoop(), mtx_DenseLatestBuffers_(mtx_DenseLatestBuffers) {}
 
   void predefined_work(DenseTask task) override;
 
   std::mutex * mtx_DenseLatestBuffers_;
 };
 
-class CPUReduceQueueExecLoop : public PredefinedQueueExecLoop {
+class CPUReduceQueueExecLoop : public PredefinedDenseQueueExecLoop {
  public:
   static CPUReduceQueueExecLoop* init_loop(::byteps::sparse::CpuReducer* denseReducer,
                                            std::mutex * mtx_DenseLatestBuffers);
+  ~CPUReduceQueueExecLoop() override {
+    stop_executors();
+    delete mtx_DenseLatestBuffers_;
+    delete _loopdenseReducer;
+  }
 
  private:
   CPUReduceQueueExecLoop(::byteps::sparse::CpuReducer * denseReducer, std::mutex * mtx_DenseLatestBuffers)
-    : PredefinedQueueExecLoop(), _loopdenseReducer(denseReducer), mtx_DenseLatestBuffers_(mtx_DenseLatestBuffers) {}
+    : PredefinedDenseQueueExecLoop(), _loopdenseReducer(denseReducer), mtx_DenseLatestBuffers_(mtx_DenseLatestBuffers) {}
 
   void predefined_work(DenseTask task) override;
 
@@ -108,12 +119,13 @@ class CPUReduceQueueExecLoop : public PredefinedQueueExecLoop {
   std::mutex * mtx_DenseLatestBuffers_;
 };
 
-class MemcpyD2HQueueExecLoop : public PredefinedQueueExecLoop{
+class MemcpyD2HQueueExecLoop : public PredefinedDenseQueueExecLoop{
  public:
   static MemcpyD2HQueueExecLoop* init_loop();
+  ~MemcpyD2HQueueExecLoop() override { stop_executors();}
 
  private:
-  MemcpyD2HQueueExecLoop() : PredefinedQueueExecLoop() {}
+  MemcpyD2HQueueExecLoop() : PredefinedDenseQueueExecLoop() {}
 
   void predefined_work(DenseTask task) override;
 };
