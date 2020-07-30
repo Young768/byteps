@@ -28,15 +28,27 @@ void BytePSSparseEngineThread(int i) {
     if (msg.type == TERMINATE) break;
     switch (msg.type) {
       case GATHER: {
-        CUDA_CALL(cudaMemcpyAsync(
-            (void*) msg.dst, 
-            (const void *) msg.src, 
-            (size_t) msg.len, 
-            (cudaMemcpyKind) cudaMemcpyDeviceToHost, 
-            (cudaStream_t) *msg.stream));
-        CUDA_CALL(cudaStreamSynchronize(*msg.stream));
+        // Send signal to BPS worker to perform gather precondition monitoring.
+        comm_socket_server_->send_gather_pre(
+            msg.request_global_session_id, msg.storage_local_gid);
 
-        byteps_server_->Response(msg.req_meta, msg.kvpairs);
+        // Store the msg to a vector of vector msg_list_
+        // msg_list_[request_global_session_id][request_global_session_id] = msg
+
+        // delay the memcpyD2H and server response to
+        // server side comm socket listening.
+
+        // {
+        //   CUDA_CALL(cudaMemcpyAsync(
+        //       (void*) msg.dst, 
+        //       (const void *) msg.src, 
+        //       (size_t) msg.len, 
+        //       (cudaMemcpyKind) cudaMemcpyDeviceToHost, 
+        //       (cudaStream_t) *msg.stream));
+        //   CUDA_CALL(cudaStreamSynchronize(*msg.stream));
+
+        //   byteps_server_->Response(msg.req_meta, msg.kvpairs);
+        // }
       } break;
 
       case SCATTER: {
@@ -47,6 +59,11 @@ void BytePSSparseEngineThread(int i) {
             (cudaMemcpyKind) cudaMemcpyHostToDevice, 
             (cudaStream_t) *msg.stream));
         CUDA_CALL(cudaStreamSynchronize(*msg.stream));
+
+        // IPC send to local byteps worker, do scatter followup bwd
+        int dummy_op;
+        comm_socket_server_->send_scatter_followup_bwd(
+            msg.request_global_session_id, msg.storage_local_gid, dummy_op);
 
         ps::KVPairs<char> res; // send push response (empty payload)
         byteps_server_->Response(msg.req_meta, res); 
@@ -84,6 +101,7 @@ void InitCudaIpc() {
   streams_h2d_.resize(local_size_);
   embed_ipc_handlers_.resize(local_size_);
   embed_bufs_.resize(local_size_);
+  embed_grad_bufs_.resize(local_size_);
   embed_buflens_.resize(local_size_);
 
   for (int gid = 0; gid < local_size_; ++gid) {
@@ -91,6 +109,10 @@ void InitCudaIpc() {
 
     CUDA_CALL(cudaIpcOpenMemHandle(&embed_bufs_[gid], 
               *(cudaIpcMemHandle_t *)&shm->embedMemHandle[gid],
+              cudaIpcMemLazyEnablePeerAccess));
+
+    CUDA_CALL(cudaIpcOpenMemHandle(&embed_grad_bufs_[gid], 
+              *(cudaIpcMemHandle_t *)&shm->embedGradMemHandle[gid],
               cudaIpcMemLazyEnablePeerAccess));
 
     CUDA_CALL(cudaStreamCreateWithFlags(&streams_d2h_[gid], 
@@ -135,7 +157,7 @@ void BytepsSparseHandler(const ps::KVMeta &req_meta,
               << "\t sender=" << req_meta.sender
               << "\t cmd=" << req_meta.cmd;
   }
-  
+
   if (IsDenseKey(key)) { // dense reduce
     if (!is_dense_inited_) {
       InitDenseReduce();
@@ -234,13 +256,13 @@ void BytepsSparseHandler(const ps::KVMeta &req_meta,
 
       auto recved = reinterpret_cast<char*>(req_data.vals.data());
 
-      int from_gid = req_meta.cmd; // from which gpu (global id)
-      int global_num_gpu = local_size_ * ps::NumServers();
-      CHECK_LT(from_gid, global_num_gpu) << from_gid;
+      int from_global_session_id = req_meta.cmd; // from which session (global session id)
+      int global_num_sess = local_session_size_ * ps::NumServers();
+      CHECK_LT(from_global_sess_id, global_num_sess) << from_global_session_id;
 
       void* src = (void*) recved;
-      void* dst = (void*) ((char*)embed_bufs_[target_local_gid] + 
-                  embed_buflens_[target_local_gid] / global_num_gpu * from_gid);
+      void* dst = (void*) ((char*)embed_grad_bufs_[target_local_gid] + 
+                  embed_buflens_[target_local_gid] / global_num_sess * from_global_session_id);
 
       // init engine message
       BytePSSparseEngineMessage msg;
@@ -251,6 +273,8 @@ void BytepsSparseHandler(const ps::KVMeta &req_meta,
       msg.kvpairs = req_data; // hold the sarrays to prevent it from being released too early
       msg.req_meta = req_meta;
       msg.stream = &streams_h2d_[target_local_gid];
+      msg.request_global_session_id = from_global_session_id;
+      msg.storage_local_gid = target_local_gid;
 
       int qid = (request_id_++) % (engine_nthreads_-1); // load balanced
       engine_queues_[qid]->Push(msg);
@@ -264,12 +288,12 @@ void BytepsSparseHandler(const ps::KVMeta &req_meta,
         AllocMemoryAndCreateSarray(gather_map_[key].lens, 1, (int*)&len);
       }
 
-      int from_gid = req_meta.cmd; // from which gpu (global id)
-      int global_num_gpu = local_size_ * ps::NumServers();
-      CHECK_LT(from_gid, global_num_gpu) << from_gid;
+      int from_global_session_id = req_meta.cmd; // from which session (global session id)
+      int global_num_sess = local_session_size_ * ps::NumServers();
+      CHECK_LT(from_global_sess_id, global_num_sess) << from_global_session_id;
 
       void* src = (void*) ((char*)embed_bufs_[target_local_gid] + 
-                  embed_buflens_[target_local_gid] / global_num_gpu * from_gid);
+                  embed_buflens_[target_local_gid] / global_num_sess * from_global_session_id);
       void* dst = (void*) gather_map_[key].vals.data();
 
       // init engine message
@@ -281,6 +305,8 @@ void BytepsSparseHandler(const ps::KVMeta &req_meta,
       msg.kvpairs = gather_map_[key]; 
       msg.req_meta = req_meta;
       msg.stream = &streams_d2h_[target_local_gid];
+      msg.request_global_session_id = from_global_session_id;
+      msg.storage_local_gid = target_local_gid;
 
       int qid = (request_id_++) % (engine_nthreads_-1); // load balanced
       engine_queues_[qid]->Push(msg);
@@ -336,6 +362,11 @@ void InitEnv() {
   }
 
   bps_reducer_ = new ::byteps::sparse::CpuReducer(nullptr);
+
+  int workerID;
+  comm_socket_server_ = std::unique_ptr<BytePSCommSocket>(
+      new BytePSCommSocket(true /* server_mode */));
+  comm_socket_server_->init(&workerID);
 }
 
 void ReleaseServerResources() {
@@ -358,6 +389,7 @@ void ReleaseServerResources() {
 
   for (int gid = 0; gid < local_size_; ++gid) {
     CUDA_CALL(cudaIpcCloseMemHandle(embed_bufs_[gid]));
+    CUDA_CALL(cudaIpcCloseMemHandle(embed_grad_bufs_[gid]));
     CUDA_CALL(cudaStreamDestroy(streams_d2h_[gid]));
   }
 

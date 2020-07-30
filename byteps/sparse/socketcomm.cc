@@ -13,10 +13,11 @@
 // limitations under the License.
 // =============================================================================
 
-#include "socketcomm.h"
 #include <cerrno>
 #include <cstring>
 
+#include "socketcomm.h"
+#include "compute_hook.h"
 
 namespace byteps {
 namespace sparse {
@@ -29,7 +30,6 @@ BytePSCommSocket::BytePSCommSocket(std::shared_ptr<BytePSSparseComm> comm,
   std::shared_ptr<BytePSCommSocket> sock_comm =
       std::static_pointer_cast<BytePSCommSocket>(comm);
   // TODO: use private members directly
-  _local_size = sock_comm->getLocalSize();
   _worker_id = sock_comm->getWorkerID();
   _send_path = sock_comm->getSendPath() + path_suffix;
   _recv_path = sock_comm->getRecvPath() + path_suffix;
@@ -42,22 +42,25 @@ BytePSCommSocket::BytePSCommSocket(std::shared_ptr<BytePSSparseComm> comm,
   LOG(INFO) << "all sockets create successfully";
 }
 
-void BytePSCommSocket::init(int* local_size, int* worker_id) {
+void BytePSCommSocket::init(int* worker_id, std::shared_ptr<ComputeHookManager> compute_hook) {
   LOG(INFO) << "Using Communicator=Socket";
+  if (! _server_mode){
+    CHECK(compute_hook != nullptr) << "Worker mode BytePSCommSocket init must provide a compute hook.";
+    _compute_hook = compute_hook;
+  } else{
+    _compute_hook = nullptr;
+  }
 
   // We should init size, etc. using getenv
   // do env check
-  CHECK(getenv("BYTEPS_LOCAL_SIZE"))
-      << "error: env BYTEPS_LOCAL_SIZE not set";
   CHECK(getenv("DMLC_WORKER_ID")) << "error: env DMLC_WORKER_ID not set";
   CHECK(getenv("DMLC_NUM_WORKER")) << "error: env DMLC_NUM_WORKER not set";
 
-  //*local_size = atoi(getenv("BYTEPS_LOCAL_SIZE"));
-  //*worker_id = atoi(getenv("DMLC_WORKER_ID"));
+  *worker_id = atoi(getenv("DMLC_WORKER_ID"));
 
-  _local_size = *local_size;
-  _worker_id = *worker_id;
-
+  // We assume there is only one byteps worker per node in sparse mode
+  // server's worker_id = DMLC_WORKER_ID + 1, worker's worker_id = DMLC_WORKER_ID
+  _worker_id = *worker_id + _server_mode;
 
   if (getenv("BYTEPS_SOCKET_PATH")) {
     _send_path = std::string(getenv("BYTEPS_SOCKET_PATH")) +
@@ -72,10 +75,8 @@ void BytePSCommSocket::init(int* local_size, int* worker_id) {
   _send_fd = initSocket(_worker_id, _send_path);
   _recv_fd = initSocket(_worker_id, _recv_path);
 
-
   _listen_thread =
         new std::thread(&BytePSCommSocket::startListenThread, this);
-
 
   LOG(INFO) << "all sockets create successfully";
 }
@@ -116,8 +117,8 @@ int BytePSCommSocket::initSocket(int rank, const std::string& path) {
   return fd;
 }
 
-void BytePSCommSocket::startListenThread() {  // each worker starts this in
-                                              // background thread
+void BytePSCommSocket::startListenThread() {  
+  // each worker starts this in background thread
   LOG(INFO) << "Listening on socket " << _worker_id;
   char buffer[MAX_LINE];
   while (true) {
@@ -136,21 +137,49 @@ void BytePSCommSocket::startListenThread() {  // each worker starts this in
     //if (BytePSGlobal::ShouldShutdown()) break;
 
     auto message = *(BytePSCommMsg*)buffer;
-    switch (message.signal) {
-      case GATHER_PRE:
-        LOG(INFO) << "receive info 1 from server";
-        //To-do
-        break;
-      case SCATTER_FOLLOWUP:
-        LOG(INFO) << "receive info 2 from server";
-        //To-do
-        break;
-      case GATHER_PRE_READY:
-        LOG(INFO) << "receive info from worker";
-        //To-do
-        break;
-      default:
-        CHECK(0) << "unsupported signal: " << message.signal;
+
+    if (_server_mode){
+      // Server Listen Mode
+      switch (message.signal) {
+        case GATHER_PRE_READY:
+          //To-do: add ready table operation here.
+          LOG(INFO) << "receive info GATHER_PRE_READY from worker";
+          
+          // exec_msg = msg_list_[message.req_session_id][message.storage_id];
+          // {
+          //   CUDA_CALL(cudaMemcpyAsync(
+          //       (void*) exec_msg.dst, 
+          //       (const void *) exec_msg.src, 
+          //       (size_t) exec_msg.len, 
+          //       (cudaMemcpyKind) cudaMemcpyDeviceToHost, 
+          //       (cudaStream_t) *exec_msg.stream));
+          //   CUDA_CALL(cudaStreamSynchronize(*exec_msg.stream));
+
+          //   byteps_server_->Response(exec_msg.req_meta, exec_msg.kvpairs);
+          // }
+
+          break;
+        default:
+          CHECK(0) << "unsupported signal: " << message.signal;
+      }
+    } else { 
+      // Worker Listen Mode
+      switch (message.signal) {
+        case GATHER_PRE:
+          LOG(INFO) << "receive info GATHER_PRE from server";
+          _compute_hook->addWorkerGatherMonitor(message.req_session_id, message.storage_id);
+          break;
+        case SCATTER_FOLLOWUP_FWD:
+          LOG(INFO) << "receive info SCATTER_FOLLOWUP_FWD from server";
+          _compute_hook->scatter_followup_fwd(message.req_session_id, message.storage_id);
+          break;
+        case SCATTER_FOLLOWUP_BWD:
+          LOG(INFO) << "receive info SCATTER_FOLLOWUP_BWD from server";
+          _compute_hook->scatter_followup_bwd(message.req_session_id, message.storage_id);
+          break;
+        default:
+          CHECK(0) << "unsupported signal: " << message.signal;
+      }
     }
 
     LOG(INFO) << "root socket recved: src=" << message.src
@@ -213,24 +242,31 @@ int BytePSCommSocket::recvSignal(int* source, void* data, int max_len) {
 }
 
 
-int BytePSCommSocket::gather_ready(int req_session_id, int storage_id) {
-  int dst = _worker_id+1;
+int BytePSCommSocket::send_gather_ready(int req_session_id, int storage_id) {
+  int dst = _worker_id + 1; // dst is server
   int op;
   BytePSCommSignal sig = GATHER_PRE_READY;
   struct BytePSCommMsg data = {_worker_id, sig, req_session_id, storage_id, op};
   return sendSignal(dst, &data, sizeof(data));
 }
 
-int BytePSCommSocket::scatter_followup(int req_session_id, int storage_id, int op) {
-  int dst = _worker_id-1;
-  BytePSCommSignal sig = GATHER_PRE;
+int BytePSCommSocket::send_scatter_followup_fwd(int req_session_id, int storage_id, int op) {
+  int dst = _worker_id - 1; // dst is worker
+  BytePSCommSignal sig = SCATTER_FOLLOWUP_FWD;
   struct BytePSCommMsg data = {_worker_id, sig, req_session_id, storage_id, op};
   return sendSignal(dst, &data, sizeof(data));
 }
 
-int BytePSCommSocket::gather_pre(int req_session_id, int storage_id) {
-  int dst = _worker_id-1;
-  BytePSCommSignal sig = SCATTER_FOLLOWUP;
+int BytePSCommSocket::send_scatter_followup_bwd(int req_session_id, int storage_id, int op) {
+  int dst = _worker_id - 1; // dst is worker
+  BytePSCommSignal sig = SCATTER_FOLLOWUP_BWD;
+  struct BytePSCommMsg data = {_worker_id, sig, req_session_id, storage_id, op};
+  return sendSignal(dst, &data, sizeof(data));
+}
+
+int BytePSCommSocket::send_gather_pre(int req_session_id, int storage_id) {
+  int dst = _worker_id - 1; // dst is worker
+  BytePSCommSignal sig = GATHER_PRE;
   int op;
   struct BytePSCommMsg data = {_worker_id, sig, req_session_id, storage_id, op};
   return sendSignal(dst, &data, sizeof(data));
